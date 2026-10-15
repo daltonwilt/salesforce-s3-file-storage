@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>File_Key__c</fullName>
+    <label>File Key</label>
+    <description>S3 object key in the form {parentRecordId}/{uuid}/{fileName}. Upsert key for the AWS sync.</description>
+    <type>Text</type>
+    <length>255</length>
+    <required>true</required>
+    <externalId>true</externalId>
+    <unique>true</unique>
+    <caseSensitive>true</caseSensitive>
+</CustomField>

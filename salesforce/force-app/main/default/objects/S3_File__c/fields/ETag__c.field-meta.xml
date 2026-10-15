@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>ETag__c</fullName>
+    <label>ETag</label>
+    <description>Entity tag reported by S3 after upload.</description>
+    <type>Text</type>
+    <length>100</length>
+    <required>false</required>
+    <externalId>false</externalId>
+    <unique>false</unique>
+</CustomField>
