@@ -1,0 +1,40 @@
+<template>
+  <lightning-card title={cardTitle} icon-name="utility:cloud">
+    <lightning-button-icon slot="actions" icon-name="utility:refresh" alternative-text="Refresh" title="Refresh"
+      onclick={handleRefresh} disabled={refreshDisabled}></lightning-button-icon>
+
+    <template lwc:if={hasRecord}>
+      <div class="slds-p-horizontal_medium">
+        <lightning-input type="file" label="Upload files" multiple onchange={handleFilesSelected}
+          disabled={isUploading}></lightning-input>
+
+        <template lwc:if={isUploading}>
+          <div class="slds-m-top_small">
+            <p class="slds-text-body_small slds-m-bottom_xx-small">
+              Uploading {uploadLabel}: {uploadProgress}%
+            </p>
+            <lightning-progress-bar value={uploadProgress} size="medium"></lightning-progress-bar>
+          </div>
+        </template>
+      </div>
+
+      <div class="slds-is-relative slds-m-top_medium table-area">
+        <template lwc:if={isLoading}>
+          <lightning-spinner alternative-text="Loading files" size="small"></lightning-spinner>
+        </template>
+        <template lwc:if={hasFiles}>
+          <lightning-datatable key-field="id" data={files} columns={columns} hide-checkbox-column
+            onrowaction={handleRowAction}></lightning-datatable>
+        </template>
+        <template lwc:elseif={showEmptyState}>
+          <p class="slds-p-around_medium slds-text-color_weak">No files yet.</p>
+        </template>
+      </div>
+    </template>
+    <template lwc:else>
+      <p class="no-record slds-p-around_medium slds-text-color_weak">
+        No record selected. Set the Record Id property for this component in the page builder.
+      </p>
+    </template>
+  </lightning-card>
+</template>
