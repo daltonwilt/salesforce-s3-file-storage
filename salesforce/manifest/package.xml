@@ -1,36 +1,53 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Package xmlns="http://soap.sforce.com/2006/04/metadata">
     <types>
-        <members>*</members>
+        <members>S3FileApi</members>
+        <members>S3FileApiMock</members>
+        <members>S3FileAsyncTest</members>
+        <members>S3FileCleanupJob</members>
+        <members>S3FileController</members>
+        <members>S3FileControllerTest</members>
+        <members>S3FileDeleteQueueable</members>
+        <members>S3FileKeys</members>
+        <members>S3FileKeysTest</members>
+        <members>S3FileRepository</members>
+        <members>S3FileTriggerHandler</members>
         <name>ApexClass</name>
     </types>
     <types>
-        <members>*</members>
-        <name>ApexComponent</name>
-    </types>
-    <types>
-        <members>*</members>
-        <name>ApexPage</name>
-    </types>
-    <types>
-        <members>*</members>
-        <name>ApexTestSuite</name>
-    </types>
-    <types>
-        <members>*</members>
+        <members>S3FileTrigger</members>
         <name>ApexTrigger</name>
     </types>
     <types>
-        <members>*</members>
-        <name>AuraDefinitionBundle</name>
+        <members>S3_File__c.Content_Type__c</members>
+        <members>S3_File__c.ETag__c</members>
+        <members>S3_File__c.File_Key__c</members>
+        <members>S3_File__c.File_Name__c</members>
+        <members>S3_File__c.Parent_Record_Id__c</members>
+        <members>S3_File__c.Size_Bytes__c</members>
+        <members>S3_File__c.Status__c</members>
+        <name>CustomField</name>
     </types>
     <types>
-        <members>*</members>
+        <members>S3_File__c</members>
+        <name>CustomObject</name>
+    </types>
+    <types>
+        <members>S3_File__c</members>
+        <name>CustomTab</name>
+    </types>
+    <types>
+        <members>S3_File__c-S3 File Layout</members>
+        <name>Layout</name>
+    </types>
+    <types>
+        <members>s3FileManager</members>
         <name>LightningComponentBundle</name>
     </types>
     <types>
-        <members>*</members>
-        <name>StaticResource</name>
+        <members>S3_File_Integration</members>
+        <members>S3_File_User</members>
+        <name>PermissionSet</name>
     </types>
     <version>67.0</version>
 </Package>
