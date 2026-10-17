@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Salesforce S3 file storage backend (${Environment})
+ 
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - uat
+      - prod
+    Description: Deployment environment for this stack
+ 
+Resources:
+  FilesKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub 'Encrypts S3 file storage objects (${Environment})'
+      EnableKeyRotation: true
+      PendingWindowInDays: 7
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAccountAdmin
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+
+  FilesKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/sf-files-${Environment}'
+      TargetKeyId: !Ref FilesKey
+
+  FilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # 5a. Name
+      BucketName: !Sub 'sf-files-${AWS::AccountId}-${AWS::Region}-${Environment}'
+ 
+      # 5b. Ownership
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+ 
+      # 5c. Public access
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+ 
+      # 5d. Encryption
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'aws:kms'
+              KMSMasterKeyID: !GetAtt FilesKey.Arn
+            BucketKeyEnabled: true
+ 
+      # 5e. Versioning
+      VersioningConfiguration:
+        Status: Enabled
+ 
+      # 5f. Lifecycle
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+          - Id: ExpireNoncurrentVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+          - Id: CleanUpExpiredDeleteMarkers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
+
+  FilesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FilesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt FilesBucket.Arn
+              - !Sub '${FilesBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+
+Outputs:
+  BucketName:
+    Description: Name of the S3 file storage bucket
+    Value: !Ref FilesBucket
+  KeyArn:
+    Description: ARN of the KMS key that encrypts the file storage bucket
+    Value: !GetAtt FilesKey.Arn

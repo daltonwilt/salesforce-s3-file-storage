@@ -2,7 +2,7 @@
 
 *A staged guide to building the AWS side of Salesforce External File Storage by hand*
 
-**Status:** In progress. Milestone 0 is complete.
+**Status:** In progress. Milestones 0 and 1 are complete.
 
 ## How to use this guide
 
@@ -17,7 +17,7 @@ The architecture and design decisions are in [Salesforce_S3_File_Storage_Design.
 ### Progress
 
 - [x] 0. Tooling and account safety
-- [ ] 1. Secure bucket
+- [x] 1. Secure bucket
 - [ ] 2. Presign Lambda: single-part upload and download
 - [ ] 3. HTTP API with IAM auth
 - [ ] 4. Multipart upload, complete, delete, and error mapping
@@ -91,7 +91,7 @@ sam --version
 
 ---
 
-## Milestone 1: Secure bucket
+## Milestone 1: Secure bucket ✅
 
 **Goal:** your first CloudFormation stack, containing an encrypted, private, versioned bucket. It's only `template.yaml`, with no code.
 
@@ -119,7 +119,7 @@ sam --version
 | Parameter `Environment` | String, default `dev`, allowed values `dev`, `uat`, `prod` |
 | KMS key | Key rotation enabled. The key policy must give your account (`arn:aws:iam::${AWS::AccountId}:root`) full control of the key. **A key without a usable policy can lock you out.** |
 | KMS alias | `alias/sf-files-${Environment}` |
-| Bucket | **Name:** `${AWS::AccountId}-${AWS::Region}-${Environment}-sf-files`. Bucket names are global across all AWS customers, so the account ID keeps it unique.<br>**Ownership:** `BucketOwnerEnforced`.<br>**Public access:** all four Block Public Access settings on.<br>**Encryption:** SSE-KMS with your key, Bucket Key enabled.<br>**Versioning:** on.<br>**Lifecycle rules:** abort incomplete multipart uploads after 7 days; expire noncurrent versions after 30 days; remove expired delete markers (`ExpiredObjectDeleteMarker: true`), which are otherwise left behind once their old versions expire. |
+| Bucket | **Name:** `sf-files-${AWS::AccountId}-${AWS::Region}-${Environment}`. Bucket names are global across all AWS customers, so the account ID keeps it unique.<br>**Ownership:** `BucketOwnerEnforced`.<br>**Public access:** all four Block Public Access settings on.<br>**Encryption:** SSE-KMS with your key, Bucket Key enabled.<br>**Versioning:** on.<br>**Lifecycle rules:** abort incomplete multipart uploads after 7 days; expire noncurrent versions after 30 days; remove expired delete markers (`ExpiredObjectDeleteMarker: true`), which are otherwise left behind once their old versions expire. |
 | Bucket policy | Deny all S3 actions on the bucket and its objects when `aws:SecureTransport` is `false` |
 | Outputs | `BucketName` and `KeyArn` |
 
@@ -155,7 +155,12 @@ aws s3api get-public-access-block --bucket $BUCKET       # all four true
 aws s3api get-bucket-lifecycle-configuration --bucket $BUCKET   # all three lifecycle actions
 ```
 
-**Reference:** `FilesKey`, `FilesKeyAlias`, `FilesBucket` and `FilesBucketPolicy` in the reference `template.yaml`. That version also has CORS and notifications, which you add in milestones 5 and 6.
+**Reference:** `FilesKey`, `FilesKeyAlias`, `FilesBucket` and `FilesBucketPolicy` in the reference `template.yaml`. That version also has CORS and notifications, which you add in milestones 5 and 6. Its bucket name uses a different pattern; this stack uses `sf-files-${AWS::AccountId}-${AWS::Region}-${Environment}`.
+
+**Notes from the milestone 1 review:**
+- **SSE-C is blocked.** `get-bucket-encryption` shows `BlockedEncryptionTypes: SSE-C` even though the template doesn't set it. AWS blocks customer-provided keys on new buckets by default. It doesn't affect SSE-KMS.
+- **ETags aren't MD5s.** With SSE-KMS, an object's ETag isn't the MD5 of its content. Treat ETags as opaque version fingerprints. The sync Lambda stores them that way in milestone 7.
+- **The CLI adds checksums.** Uploads showed `ChecksumAlgorithm: CRC64NVME` because the AWS CLI adds an integrity checksum by default. The Java SDK does the same, which matters for presigned URLs in milestone 2.
 
 ---
 
@@ -320,7 +325,7 @@ Deploy with a low threshold so test files stay small: `sam deploy --parameter-ov
   - Permission policy: `execute-api:Invoke` on `arn:aws:execute-api:${Region}:${AccountId}:${FilesApi}/*/POST/*`.
 - **Bucket CORS rule:** `AllowedOrigins: !Ref SalesforceOrigins`, methods `GET`, `PUT`, `HEAD`, headers `*`, **`ExposedHeaders: [ETag]`**, `MaxAge`.
 - **Outputs:** `InvokeRoleArn`, `CalloutUserName`, and `BucketEndpoint` (`https://${FilesBucket}.s3.${AWS::Region}.amazonaws.com`).
-- **Deploying:** a named IAM role needs `--capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM`.
+- **Deploying:** a named IAM role needs `--capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM`. `aws/samconfig.toml` currently has only `capabilities = "CAPABILITY_IAM"`, so add `CAPABILITY_NAMED_IAM` there (space-separated) or every `sam deploy` will need the flag.
 - **Access key:** create one for the callout user with `aws iam create-access-key --user-name <CalloutUserName>`. Paste it only into Salesforce, and never commit it.
 
 ### Build in Salesforce Setup
@@ -354,7 +359,7 @@ These aren't in the repo yet; they can be added as metadata later.
   - **Visibility timeout:** a received message is hidden while it's being processed, and reappears if it isn't deleted.
   - **`maxReceiveCount` and dead-letter queues:** messages that keep failing move to the DLQ instead of retrying forever.
 - **Queue policies:** S3 needs permission to send to your queue. Scope it with `aws:SourceArn` (your bucket) and `aws:SourceAccount`.
-- **Circular dependencies:** the bucket's notification refers to the queue, and the queue policy refers to the bucket. To break the loop, build the bucket ARN with `!Sub` from its known name instead of `!GetAtt`, and add `DependsOn` from the bucket to the queue policy. S3 checks it can send when the notification is created.
+- **Circular dependencies:** the bucket's notification refers to the queue, and the queue policy refers to the bucket. To break the loop, build the bucket ARN with `!Sub` from its known name instead of `!GetAtt`, and add `DependsOn` from the bucket to the queue policy. The name must match `BucketName` in the template exactly: `arn:aws:s3:::sf-files-${AWS::AccountId}-${AWS::Region}-${Environment}`. S3 checks it can send when the notification is created.
 
 ### Build
 - **`FileEventsDLQ`:** SQS-managed encryption, 14-day retention.
@@ -454,6 +459,7 @@ The first message may be an `s3:TestEvent` sent when the notification was create
 | `ExpiredToken` / `Token has expired` | Your SSO session ended. Run `aws sso login`. |
 | `Rate exceeded` in the console | Temporary throttling. Wait a minute, then refresh before retrying. |
 | Your stack isn't visible in the console | The console region isn't `us-east-1`. |
+| CLI output opens in a pager (lines start with `:`) | Press `q` to exit. Turn the pager off with `export AWS_PAGER=""` in `~/.zshrc`, or `--no-cli-pager` per command. |
 | `SignatureDoesNotMatch` on a presigned PUT | Headers or byte count differ from what was signed. Send exactly the returned `headers`. |
 | `{"message":"Forbidden"}` from the API | The request wasn't signed, or the caller lacks `execute-api:Invoke`. |
 | HeadObject returns 403 instead of 404 | The function's role is missing `s3:ListBucket` on the bucket. |
