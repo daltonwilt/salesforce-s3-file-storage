@@ -1,0 +1,5 @@
+.aws-sam/
+samconfig.toml
+target/
+*.key
+*.pem
