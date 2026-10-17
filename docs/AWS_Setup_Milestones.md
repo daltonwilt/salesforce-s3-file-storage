@@ -119,7 +119,7 @@ sam --version
 | Parameter `Environment` | String, default `dev`, allowed values `dev`, `uat`, `prod` |
 | KMS key | Key rotation enabled. The key policy must give your account (`arn:aws:iam::${AWS::AccountId}:root`) full control of the key. **A key without a usable policy can lock you out.** |
 | KMS alias | `alias/sf-files-${Environment}` |
-| Bucket | **Name:** `${AWS::AccountId}-${AWS::Region}-${Environment}-sf-files`. Bucket names are global across all AWS customers, so the account ID keeps it unique.<br>**Ownership:** `BucketOwnerEnforced`.<br>**Public access:** all four Block Public Access settings on.<br>**Encryption:** SSE-KMS with your key, Bucket Key enabled.<br>**Versioning:** on.<br>**Lifecycle rules:** abort incomplete multipart uploads after 7 days; expire noncurrent versions after 30 days. |
+| Bucket | **Name:** `${AWS::AccountId}-${AWS::Region}-${Environment}-sf-files`. Bucket names are global across all AWS customers, so the account ID keeps it unique.<br>**Ownership:** `BucketOwnerEnforced`.<br>**Public access:** all four Block Public Access settings on.<br>**Encryption:** SSE-KMS with your key, Bucket Key enabled.<br>**Versioning:** on.<br>**Lifecycle rules:** abort incomplete multipart uploads after 7 days; expire noncurrent versions after 30 days; remove expired delete markers (`ExpiredObjectDeleteMarker: true`), which are otherwise left behind once their old versions expire. |
 | Bucket policy | Deny all S3 actions on the bucket and its objects when `aws:SecureTransport` is `false` |
 | Outputs | `BucketName` and `KeyArn` |
 
@@ -152,6 +152,7 @@ aws s3 cp /tmp/test.txt s3://$BUCKET/test.txt
 aws s3api head-object --bucket $BUCKET --key test.txt   # ServerSideEncryption: aws:kms
 curl -s https://$BUCKET.s3.amazonaws.com/test.txt        # AccessDenied (anonymous)
 aws s3api get-public-access-block --bucket $BUCKET       # all four true
+aws s3api get-bucket-lifecycle-configuration --bucket $BUCKET   # all three lifecycle actions
 ```
 
 **Reference:** `FilesKey`, `FilesKeyAlias`, `FilesBucket` and `FilesBucketPolicy` in the reference `template.yaml`. That version also has CORS and notifications, which you add in milestones 5 and 6.
@@ -458,3 +459,40 @@ The first message may be an `s3:TestEvent` sent when the notification was create
 | HeadObject returns 403 instead of 404 | The function's role is missing `s3:ListBucket` on the bucket. |
 | `CREATE_FAILED` on the bucket notification | The queue policy doesn't allow S3 yet. Add `DependsOn` and check the `aws:SourceArn` condition. |
 | Files stay Pending forever | Check the sync Lambda's logs and the DLQ. If they've been Pending for 24 hours, `S3FileCleanupJob` marks them Failed. |
+
+## Review notes
+
+Open questions from a review of this guide on 2026-10-16. Talk through each one when you reach its milestone; nothing above has been changed yet.
+
+### Milestone 2
+- **`sam local invoke` uses the wrong bucket.** Locally, SAM resolves `!Ref FilesBucket` to the string `FilesBucket`, so presigned URLs point at a bucket that doesn't exist. Pass the real name with `--env-vars events/env.json`: `{"PresignFunction":{"BUCKET_NAME":"<bucket>"}}`.
+- **Checksums in current SDK versions.** Newer AWS SDK v2 releases add default integrity checksums, which can put `x-amz-checksum-*` or `x-amz-sdk-checksum-algorithm` into presigned PUTs and break browser uploads. If your URLs contain them, set `requestChecksumCalculation(WHEN_REQUIRED)`. The reference's SDK 2.25 predates this, so comparing against it won't show the problem.
+- **Jackson 2 or 3.** "Current Jackson" now means Jackson 3, which has a new groupId and package (`tools.jackson`). Choose deliberately; 2.x stays closer to the reference.
+- **Accept 18-character IDs only in `FileKeys`.** Apex always writes 18, and `S3FileRepository.forParent` matches the 18-character string, so a file stored under a 15-character ID would never show on the record.
+- **Encode `Content-Disposition`.** `fileName` is the original, unsanitized name (unicode, quotes), and it's null for records the sync Lambda created. Fall back to `FileKeys.fileName(key)`, then send `filename="<ascii fallback>"; filename*=UTF-8''<percent-encoded>`. The reference's `downloadUrl` shows how.
+- **Create log groups now.** Lambda creates `/aws/lambda/<fn>` on the first run, so an `AWS::Logs::LogGroup` with the same name added in milestone 8 fails with "already exists". Define it alongside the function (or use `LoggingConfig`).
+- **Credential lifetime.** A presigned URL stops working when the Lambda's temporary credentials expire, even if its own expiry is later. This matters most for the 60-minute part URLs in milestone 4.
+
+### Milestone 4
+- **Test step 5 can't pass as written.** The `ListParts` check only aborts above `MAX_FILE_BYTES` (5 GB), so uploading slightly more than the declared 12 MB succeeds. The metadata idea doesn't help either: metadata from `CreateMultipartUpload` only appears on the finished object and can't be read during the upload.
+- **Better fix: sign `Content-Length` into each `UploadPart` URL.** Part sizes are fixed (`partSize`, with the remainder in the last part), and the LWC slices exactly those sizes. The total then equals the declared size, and an oversized part fails with `SignatureDoesNotMatch`. Keep `ListParts` as a backup check. The reference doesn't do this; add it to the fixes table.
+- **Paginate `ListParts`.** It returns at most 1,000 parts per page, and a 5 GB file with 5 MB parts has 1,024.
+
+### Milestone 5
+- **CSP host must match the presigned URLs.** Milestone 1 tests `bucket.s3.amazonaws.com`, but `BucketEndpoint` is `bucket.s3.us-east-1.amazonaws.com`. Check which host the presigner actually emits and use that for the CSP Trusted Site.
+
+### Milestone 6
+- **Why SQS-managed encryption.** S3 can't send notifications to a queue encrypted with the AWS-managed `aws/sqs` key. Worth adding to the Learn section.
+
+### Milestone 7
+- **Ghost records.** The upsert inserts when no record matches, so a late or duplicate `ObjectCreated` event arriving after a user deleted the record re-creates it as Available, pointing at an object that now only has a delete marker. Consider calling `HeadObject` in `SyncHandler` and skipping keys that return 404 (the sync role then needs `s3:GetObject`).
+- **DLQ test depends on how parse errors are handled.** `'not json'` reaches the DLQ only if the handler reports parse failures as batch item failures rather than skipping them.
+- **Integration user license.** Assign the *Salesforce API Integration* permission set license before `S3_File_Integration`, or the assignment fails.
+- **Placeholder secret.** Don't change the template's `SecretString` after running `put-secret-value`, or the next deploy overwrites the real values.
+
+### Milestone 8 and cleanup
+- **Delete the access key before tearing down.** CloudFormation can't delete the callout user while it still has the access key created by hand in milestone 5. Run `aws iam delete-access-key` before `sam delete`.
+- **Retain changes teardown.** Once `Retain` is on, `sam delete` leaves the bucket, KMS key and secret behind. Update the cleanup steps to match.
+
+### Guide housekeeping
+- Milestones 3–6 have no `Reference:` line.
