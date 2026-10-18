@@ -3,3 +3,5 @@ samconfig.toml
 target/
 *.key
 *.pem
+.idea/
+*.iml
