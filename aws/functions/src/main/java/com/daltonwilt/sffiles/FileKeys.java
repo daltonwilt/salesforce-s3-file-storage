@@ -9,9 +9,9 @@ import java.util.regex.Pattern;
 final class FileKeys {
 
     private static final Pattern KEY = Pattern.compile(
-            "^([A-Za-z0-9]{15}|[A-Za-z0-9]{18})"
+            "^([A-Za-z0-9]{18})"
                     + "/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-                    + "/[A-Za-z0-9._()\\- ]{1,200}$");
+                    + "/[A-Za-z0-9._()\\- ]{1,199}$");
 
     private FileKeys() {}
 

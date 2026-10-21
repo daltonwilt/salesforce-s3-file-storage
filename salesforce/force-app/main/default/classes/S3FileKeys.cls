@@ -4,7 +4,7 @@
  */
 public with sharing class S3FileKeys {
 
-    private static final Integer MAX_NAME_LENGTH = 200;
+    private static final Integer MAX_NAME_LENGTH = 199;
     private static final Integer MAX_EXTENSION_LENGTH = 20;
 
     public static String newKey(Id parentId, String fileName) {

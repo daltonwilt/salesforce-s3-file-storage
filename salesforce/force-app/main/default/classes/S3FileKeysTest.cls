@@ -10,7 +10,7 @@ private class S3FileKeysTest {
     @IsTest
     static void sanitizeKeepsExtensionWhenTruncating() {
         String result = S3FileKeys.sanitize('a'.repeat(300) + '.xlsx');
-        Assert.areEqual(200, result.length());
+        Assert.areEqual(199, result.length());
         Assert.isTrue(result.endsWith('.xlsx'));
     }
 
