@@ -172,6 +172,7 @@ aws s3api get-bucket-lifecycle-configuration --bucket $BUCKET   # all three life
 - **Lambda basics:** the handler method, the execution role (the permissions the function runs with), environment variables, memory and timeout.
 - **Presigned URLs:** the Lambda signs a request with its own credentials, and whoever holds the URL can make *exactly that* request until it expires. Signing `Content-Length` into an upload URL means the browser can't upload more bytes than Apex declared.
 - **Least privilege:** grant only the S3 and KMS actions the function needs, scoped to your bucket and key.
+- **CloudWatch Logs:** by default Lambda creates `/aws/lambda/<fn>` on the first invoke and keeps its logs forever, outside CloudFormation's control. Defining the log group yourself lets you set retention and delete it with the stack. `LoggingConfig` sends the function's logs to it, and `LogFormat: JSON` makes each line a JSON object you can filter on in Logs Insights.
 - **SnapStart:** Lambda takes a snapshot of your initialized function to make cold starts faster. Create SDK clients during init; never load secrets during init, or they get baked into the snapshot.
 - **`sam build`, `sam local invoke`, `sam logs`.**
 
@@ -179,16 +180,17 @@ aws s3api get-bucket-lifecycle-configuration --bucket $BUCKET   # all three life
 **`aws/functions/pom.xml`:**
 - `maven.compiler.release` 25.
 - Current AWS SDK v2 BOM with `s3` and `url-connection-client`. Exclude the Apache and Netty HTTP clients to keep the package small.
-- `aws-lambda-java-core`, `aws-lambda-java-events` and `jackson-databind`.
+- `aws-lambda-java-core`, `aws-lambda-java-events` and `jackson-databind` (latest **2.x**, `com.fasterxml.jackson.core`, not Jackson 3).
 - `junit-jupiter` for tests.
 
 **`FileKeys.java`:**
-- The key regex: an ID of 15 or 18 characters, then `/`, a UUID, `/`, and a name of 1–**199** characters from `[A-Za-z0-9._()\- ]`.
+- The key regex: an ID of exactly **18** characters, then `/`, a UUID, `/`, and a name of 1–**199** characters from `[A-Za-z0-9._()\- ]`. Apex always writes 18-character IDs, and `S3FileRepository.forParent` matches on them, so a file under a 15-character ID would never show on the record.
 - Helpers: `isValid(key)`, `parentId(key)` and `fileName(key)`.
 
 **`PresignHandler.java`:** input `APIGatewayV2HTTPEvent`, output `APIGatewayV2HTTPResponse`. Route on `event.getRouteKey()`, for example `"POST /upload-url"`.
 - **`/upload-url`, single-part only for now:**
   - Validate the key, the content type (same regex as `S3FileController`) and `0 < size <= MAX_FILE_BYTES`.
+  - If `size > MULTIPART_THRESHOLD_BYTES`, return **400** `{"error":"Multipart upload isn't supported yet."}`. Milestone 4 replaces this with the multipart branch.
   - Presign a `PutObject` with content type and **content length**, valid for 15 minutes.
   - Return `headers`: the signed headers the browser must send, minus `host` and `content-length`.
 - **`/download-url`:**
@@ -201,15 +203,17 @@ aws s3api get-bucket-lifecycle-configuration --bucket $BUCKET   # all three life
 - **`Globals.Function`:** `Runtime: java25`, `MemorySize: 1024`, `Timeout`, `CodeUri: functions/`, plus `AutoPublishAlias: live` and `SnapStart: ApplyOn: PublishedVersions`.
 - **`PresignFunction`:**
   - Handler set to your class.
-  - Environment variables: `BUCKET_NAME`, `MAX_FILE_BYTES`, `MULTIPART_THRESHOLD_BYTES`, `PART_SIZE_BYTES`.
+  - Environment variables: `BUCKET_NAME`, `MAX_FILE_BYTES`, `MULTIPART_THRESHOLD_BYTES` (reference default 104857600, 100 MB), `PART_SIZE_BYTES` (reference default 67108864, 64 MB).
   - Inline policy:
     - `s3:GetObject` and `s3:PutObject` on `bucket/*`
     - `s3:ListBucket` on the bucket itself, so `HeadObject` returns 404 instead of 403 for missing objects
     - `kms:GenerateDataKey` and `kms:Decrypt` on the key
+  - `LoggingConfig`: `LogGroup: !Ref PresignLogGroup` and `LogFormat: JSON`.
+- **`PresignLogGroup`** (`AWS::Logs::LogGroup`): a name you choose, such as `/sf-files/${Environment}/presign`, and `RetentionInDays: 30`. The reference has no log groups; this replaces the default `/aws/lambda/<fn>` group so milestone 8 doesn't hit "already exists".
 
 **`aws/events/*.json`:** sample events. Generate a starting shape with `sam local generate-event apigateway http-api-proxy`, then set `routeKey` and a JSON string `body`.
 
-**Tests:** JUnit tests for `FileKeys` (valid keys, 200-character names rejected, bad UUIDs) and for request validation.
+**Tests:** JUnit tests for `FileKeys` (valid keys, 200-character names rejected, 15-character IDs rejected, bad UUIDs) and for request validation, including the above-threshold 400.
 
 ### Test
 ```
@@ -219,7 +223,9 @@ curl -X PUT -H "Content-Type: text/plain" --upload-file /tmp/test.txt "<url>"   
 ```
 - **Prove `Content-Length` is signed:** upload a file with a *different* byte count to the same URL. S3 must reject it (`SignatureDoesNotMatch`).
 - **Download:** `events/download-url.json` returns a URL that downloads the file. A missing key returns 404.
-- **Deployed function:** `sam deploy`, then `aws lambda invoke --function-name <name> --cli-binary-format raw-in-base64-out --payload file://events/upload-url.json out.json`.
+- **Deployed function:** `sam deploy`, then `aws lambda invoke --function-name <name>:live --cli-binary-format raw-in-base64-out --payload file://events/upload-url.json out.json`. Invoke the `:live` alias: the unqualified name runs `$LATEST`, which has no SnapStart.
+- **Repeat the 404 test on the deployed function.** `sam local invoke` signs with your admin credentials, not the execution role, so only the deployed function shows whether the inline policy is right.
+- **Logs:** `aws logs tail /sf-files/dev/presign --follow` while you invoke. Check that the lines are JSON.
 - **Unit tests:** `mvn -f functions/pom.xml test`
 
 **Salesforce follow-up:** change `MAX_NAME_LENGTH` to 199 in `salesforce/force-app/main/default/classes/S3FileKeys.cls`, and run `S3FileKeysTest`.
@@ -468,15 +474,12 @@ The first message may be an `s3:TestEvent` sent when the notification was create
 
 ## Review notes
 
-Open questions from a review of this guide on 2026-10-16. Talk through each one when you reach its milestone; nothing above has been changed yet.
+Open questions from a review of this guide on 2026-10-16. Talk through each one when you reach its milestone. Once a decision is made, it's written into the milestone and removed from this list.
 
 ### Milestone 2
 - **`sam local invoke` uses the wrong bucket.** Locally, SAM resolves `!Ref FilesBucket` to the string `FilesBucket`, so presigned URLs point at a bucket that doesn't exist. Pass the real name with `--env-vars events/env.json`: `{"PresignFunction":{"BUCKET_NAME":"<bucket>"}}`.
 - **Checksums in current SDK versions.** Newer AWS SDK v2 releases add default integrity checksums, which can put `x-amz-checksum-*` or `x-amz-sdk-checksum-algorithm` into presigned PUTs and break browser uploads. If your URLs contain them, set `requestChecksumCalculation(WHEN_REQUIRED)`. The reference's SDK 2.25 predates this, so comparing against it won't show the problem.
-- **Jackson 2 or 3.** "Current Jackson" now means Jackson 3, which has a new groupId and package (`tools.jackson`). Choose deliberately; 2.x stays closer to the reference.
-- **Accept 18-character IDs only in `FileKeys`.** Apex always writes 18, and `S3FileRepository.forParent` matches the 18-character string, so a file stored under a 15-character ID would never show on the record.
 - **Encode `Content-Disposition`.** `fileName` is the original, unsanitized name (unicode, quotes), and it's null for records the sync Lambda created. Fall back to `FileKeys.fileName(key)`, then send `filename="<ascii fallback>"; filename*=UTF-8''<percent-encoded>`. The reference's `downloadUrl` shows how.
-- **Create log groups now.** Lambda creates `/aws/lambda/<fn>` on the first run, so an `AWS::Logs::LogGroup` with the same name added in milestone 8 fails with "already exists". Define it alongside the function (or use `LoggingConfig`).
 - **Credential lifetime.** A presigned URL stops working when the Lambda's temporary credentials expire, even if its own expiry is later. This matters most for the 60-minute part URLs in milestone 4.
 
 ### Milestone 4
