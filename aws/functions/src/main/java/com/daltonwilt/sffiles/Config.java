@@ -14,7 +14,7 @@ record Config(String bucket, long maxFileBytes, long multipartThresholdBytes, lo
     private static String required(String name) {
         String value = System.getenv(name);
         if(value == null || value.isBlank()) {
-            throw new IllegalStateException("Missing environment variable!");
+            throw new IllegalStateException("Missing environment variable " + name);
         }
 
         return value;
